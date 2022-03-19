@@ -19,24 +19,48 @@ class get_model(nn.Module):
         self.drop2 = nn.Dropout(0.5)
         self.fc3 = nn.Linear(256, num_class)
 
-    def forward(self, xyz):
-        B, _, _ = xyz.shape
+    def forward_points_embeddings(self, xyz):
         if self.normal_channel:
             norm = xyz[:, 3:, :]
             xyz = xyz[:, :3, :]
         else:
             norm = None
+
+        all_ebmdeddings = []
+
         l1_xyz, l1_points = self.sa1(xyz, norm)
         l2_xyz, l2_points = self.sa2(l1_xyz, l1_points)
         l3_xyz, l3_points = self.sa3(l2_xyz, l2_points)
-        x = l3_points.view(B, 1024)
+
+        all_ebmdeddings.append( {"xyz": l1_xyz, "points": l1_points} )
+        all_ebmdeddings.append( {"xyz": l2_xyz, "points": l2_points} )
+        all_ebmdeddings.append( {"xyz": l3_xyz, "points": l3_points} )
+
+        return all_ebmdeddings
+
+    def forward_classifier(self, xyz, last_points):
+        B, _, _ = xyz.shape # [ bs, 6, 1024 ]
+
+        x = last_points.view(B, 1024)
         x = self.drop1(F.relu(self.bn1(self.fc1(x))))
         x = self.drop2(F.relu(self.bn2(self.fc2(x))))
         x = self.fc3(x)
         x = F.log_softmax(x, -1)
 
+        return x, last_points
 
-        return x,l3_points
+    def forward(self, xyz):
+
+        points_embeddings = self.forward_points_embeddings(xyz)
+
+        # last_xyz = points_embeddings[-1]['points']
+        last_points = points_embeddings[-1]['points']
+
+        # l3_xyz    # [ bs, 3, 1 ]
+        # l3_points # [ bs, 1024, 1  ]
+        # print('last_xyz', last_xyz.shape, 'last_points', last_points.shape)
+
+        return self.forward_classifier(xyz, last_points)
 
 
 class get_loss(nn.Module):

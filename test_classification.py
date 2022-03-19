@@ -11,6 +11,7 @@ import logging
 from tqdm import tqdm
 import sys
 import importlib
+import pickle
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
@@ -29,10 +30,12 @@ def parse_args():
     parser.add_argument('--use_normals', action='store_true', default=False, help='use normals')
     parser.add_argument('--use_uniform_sample', action='store_true', default=False, help='use uniform sampiling')
     parser.add_argument('--num_votes', type=int, default=3, help='Aggregate classification scores with voting')
+    parser.add_argument('--split', type=str, default='test', help='train/test dataset split to evaluate')
+    parser.add_argument('--save_embeddings', action='store_true', default=False, help='save points embeddings for each batch')
     return parser.parse_args()
 
 
-def test(model, loader, num_class=40, vote_num=1):
+def test(model, loader, num_class=40, vote_num=1, save_embeddings=False):
     mean_correct = []
     classifier = model.eval()
     class_acc = np.zeros((num_class, 3))
@@ -45,10 +48,21 @@ def test(model, loader, num_class=40, vote_num=1):
 
         points = points.transpose(2, 1)
 
-
+        votes_embeddings = []
         for _ in range(vote_num):
-            pred, _ = classifier(points)
+            points_embeddings = classifier.forward_points_embeddings(points)
+
+            votes_embeddings.append(points_embeddings)
+
+            last_points = points_embeddings[-1]['points']
+            pred, _ = classifier.forward_classifier(points, last_points)
+
             vote_pool += pred
+
+        if save_embeddings:
+            with open(f"{loader.dataset.root}/{loader.dataset.split}/{j}.pkl", 'wb') as f:
+                pickle.dump(votes_embeddings, f)
+
         pred = vote_pool / vote_num
         pred_choice = pred.data.max(1)[1]
 
@@ -92,7 +106,7 @@ def main(args):
     log_string('Load dataset ...')
     data_path = 'data/modelnet40_normal_resampled/'
 
-    test_dataset = ModelNetDataLoader(root=data_path, args=args, split='test', process_data=False)
+    test_dataset = ModelNetDataLoader(root=data_path, args=args, split=args.split, process_data=False)
     testDataLoader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=10)
 
     '''MODEL LOADING'''
@@ -110,7 +124,7 @@ def main(args):
     classifier.load_state_dict(checkpoint['model_state_dict'])
 
     with torch.no_grad():
-        instance_acc, class_acc = test(classifier.eval(), testDataLoader, vote_num=args.num_votes, num_class=num_class)
+        instance_acc, class_acc = test(classifier.eval(), testDataLoader, vote_num=args.num_votes, num_class=num_class, save_embeddings=args.save_embeddings)
         log_string('Test Instance Accuracy: %f, Class Accuracy: %f' % (instance_acc, class_acc))
 
 

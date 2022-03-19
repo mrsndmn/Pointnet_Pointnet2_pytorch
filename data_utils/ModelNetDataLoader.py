@@ -55,6 +55,8 @@ class ModelNetDataLoader(Dataset):
         self.use_normals = args.use_normals
         self.num_category = args.num_category
 
+        self.split = split
+
         if self.num_category == 10:
             self.catfile = os.path.join(self.root, 'modelnet10_shape_names.txt')
         else:
