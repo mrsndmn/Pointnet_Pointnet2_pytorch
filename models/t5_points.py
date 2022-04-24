@@ -16,49 +16,6 @@ from transformers import AutoTokenizer
 
 tokenizer = AutoTokenizer.from_pretrained(model_checkpoint)
 
-prefix = 'what is it?'
-
-max_input_length = 128
-max_target_length = 128
-source_field = ""
-target_field = "label_name"
-
-embeddings_3d_length = 16
-
-def preprocess_function(examples):
-    inputs = [prefix for ex in examples["translation"]]
-    targets = [ex[target_field] for ex in examples["translation"]]
-    model_inputs = tokenizer(inputs, max_length=max_input_length, truncation=True)
-
-    # Setup the tokenizer for targets
-    with tokenizer.as_target_tokenizer():
-        labels = tokenizer(targets, max_length=max_target_length, truncation=True)
-
-    model_inputs["labels"] = labels["input_ids"]
-
-    model_inputs['extra_embeddings_positions'] = torch.LongTensor([ len(x) for x in model_inputs['attention_mask'] ])
-
-    for seq in model_inputs['input_ids']:
-        seq.extend([ tokenizer.pad_token_id ] * embeddings_3d_length)
-
-    return model_inputs
-
-batch_size = 16
-model_name = model_checkpoint.split("/")[-1]
-args = Seq2SeqTrainingArguments(
-    f"{model_name}-finetuned-to-3d-classification",
-    evaluation_strategy = "epoch",
-    learning_rate=2e-5,
-    per_device_train_batch_size=batch_size,
-    per_device_eval_batch_size=batch_size,
-    weight_decay=0.01,
-    save_total_limit=3,
-    num_train_epochs=1,
-    predict_with_generate=True,
-    fp16=False,
-    push_to_hub=False,
-)
-
 data_collator = DataCollatorForSeq2Seq(tokenizer, model=model)
 
 import numpy as np
@@ -111,9 +68,9 @@ parser.add_argument('--use_uniform_sample', action='store_true', default=False, 
 parser.add_argument('--num_votes', type=int, default=3, help='Aggregate classification scores with voting')
 parser.add_argument('--split', type=str, default='test', help='train/test dataset split to evaluate')
 parser.add_argument('--save_embeddings', action='store_true', default=False, help='save points embeddings for each batch')
-args = parser.parse_args([])
+argparse_args = parser.parse_args([])
 
-test_dataset = ModelNetDataLoader(root='data/modelnet40_normal_resampled', args=args, split='test', process_data=False)
+test_dataset = ModelNetDataLoader(root='data/modelnet40_normal_resampled', args=argparse_args, split='test', process_data=False)
 
 from torch.utils.data import Dataset
 import torch
@@ -169,17 +126,62 @@ class PointNet2EmbeddingsDataset(Dataset):
 
         model_embeddings = vote_embeddings[ local_batch_idx, :, : ]
 
-        return {
+        return preprocess_function({
             "label": label,
             "label_name": self.modelnet_dataset.cat[label],
             "embeddings": model_embeddings
-        }
+        })
+
+prefix = 'what is it?'
+
+max_input_length = 128
+max_target_length = 128
+source_field = ""
+target_field = "label_name"
+
+embeddings_3d_length = 1
+
+def preprocess_function(example):
+    inputs = prefix
+    targets = example['label_name']
+    model_inputs = tokenizer(inputs, max_length=max_input_length, truncation=True)
+
+    # Setup the tokenizer for targets
+    with tokenizer.as_target_tokenizer():
+        labels = tokenizer(targets, max_length=max_target_length, truncation=True)
+
+    model_inputs["labels"] = labels["input_ids"]
+
+    # extra_embeddings_positions
+    model_inputs["extra_embeddings"] = example["embeddings"].squeeze().detach().cpu().numpy()
+    model_inputs['extra_embeddings_positions'] = len(model_inputs['attention_mask'])
+
+    model_inputs['input_ids'].extend([ tokenizer.pad_token_id ] * embeddings_3d_length)
+
+    return model_inputs
+
 
 embedds = PointNet2EmbeddingsDataset(test_dataset)
 
+batch_size = 16
+model_name = model_checkpoint.split("/")[-1]
+hf_args = Seq2SeqTrainingArguments(
+    f"{model_name}-finetuned-3d-classification",
+    evaluation_strategy = "epoch",
+    learning_rate=2e-5,
+    per_device_train_batch_size=batch_size,
+    per_device_eval_batch_size=batch_size,
+    weight_decay=0.01,
+    save_total_limit=3,
+    num_train_epochs=1,
+    predict_with_generate=True,
+    fp16=False,
+    push_to_hub=False,
+)
+
 trainer = Seq2SeqTrainer(
     model,
-    args,
+    hf_args,
     train_dataset=embedds,
     eval_dataset=embedds,
     data_collator=data_collator,
