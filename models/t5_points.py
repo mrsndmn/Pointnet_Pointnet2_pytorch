@@ -44,8 +44,20 @@ def compute_metrics(eval_preds):
     # Some simple post-processing
     decoded_preds, decoded_labels = postprocess_text(decoded_preds, decoded_labels)
 
-    result = metric.compute(predictions=decoded_preds, references=decoded_labels)
-    result = {"accuracy": result["score"]}
+    decoded_labels = [ x[0] for x in decoded_labels ]
+
+    print("preds", preds)
+    print("labels", labels)
+    print("decoded_preds", decoded_preds)
+    print("decoded_labels", decoded_labels)
+
+    total = len(decoded_labels)
+    match = 0
+    for i in range(len(decoded_labels)):
+        if decoded_labels[i] == decoded_preds[i]:
+            match += 1
+
+    result = {"accuracy": match / total}
 
     prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
     result["gen_len"] = np.mean(prediction_lens)
@@ -153,37 +165,48 @@ def preprocess_function(example):
     model_inputs["labels"] = labels["input_ids"]
 
     # extra_embeddings_positions
-    model_inputs["extra_embeddings"] = example["embeddings"].squeeze().detach().cpu().numpy()
+    model_inputs["extra_embeddings"] = example["embeddings"].permute(1, 0).detach().cpu().numpy()
     model_inputs['extra_embeddings_positions'] = len(model_inputs['attention_mask'])
 
     model_inputs['input_ids'].extend([ tokenizer.pad_token_id ] * embeddings_3d_length)
 
+    # там будут эмбеддинги, поэтому надо учитывать внимание для этих токенов
+    model_inputs['attention_mask'].extend([ 1 ] * embeddings_3d_length)
+
+    inputs_decoded = tokenizer.decode(model_inputs['input_ids'], skip_special_tokens=False)
+    # print("inputs_decoded", inputs_decoded)
+
     return model_inputs
 
 
-embedds = PointNet2EmbeddingsDataset(test_dataset)
+embedds_dataset = PointNet2EmbeddingsDataset(test_dataset)
 
 batch_size = 16
 model_name = model_checkpoint.split("/")[-1]
 hf_args = Seq2SeqTrainingArguments(
     f"{model_name}-finetuned-3d-classification",
     evaluation_strategy = "epoch",
-    learning_rate=2e-5,
+    learning_rate=3e-4,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     weight_decay=0.01,
     save_total_limit=3,
-    num_train_epochs=1,
+    num_train_epochs=100,
     predict_with_generate=True,
     fp16=False,
     push_to_hub=False,
 )
 
+from torch.utils.data import random_split
+
+n_train_samples = 100
+little_dataset, _ = random_split(embedds_dataset, [ n_train_samples, len(embedds_dataset) - n_train_samples ], generator=torch.Generator().manual_seed(42))
+
 trainer = Seq2SeqTrainer(
     model,
     hf_args,
-    train_dataset=embedds,
-    eval_dataset=embedds,
+    train_dataset=little_dataset,
+    eval_dataset=little_dataset,
     data_collator=data_collator,
     tokenizer=tokenizer,
     compute_metrics=compute_metrics
