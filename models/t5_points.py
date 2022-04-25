@@ -80,10 +80,19 @@ parser.add_argument('--use_uniform_sample', action='store_true', default=False, 
 parser.add_argument('--num_votes', type=int, default=3, help='Aggregate classification scores with voting')
 parser.add_argument('--split', type=str, default='test', help='train/test dataset split to evaluate')
 parser.add_argument('--save_embeddings', action='store_true', default=False, help='save points embeddings for each batch')
+
+parser.add_argument('--embedding_level', type=int, default=-1)
+
 argparse_args = parser.parse_args([])
 
 test_dataset = ModelNetDataLoader(root='data/modelnet40_normal_resampled', args=argparse_args, split='test', process_data=False)
 train_dataset = ModelNetDataLoader(root='data/modelnet40_normal_resampled', args=argparse_args, split='train', process_data=False)
+
+
+parser1 = argparse.ArgumentParser('Testing')
+parser1.add_argument('--embedding_level', type=int, default=-1)
+argparse_args1 = parser1.parse_args()
+
 
 from torch.utils.data import Dataset
 import torch
@@ -145,14 +154,6 @@ class PointNet2EmbeddingsDataset(Dataset):
             "embeddings": model_embeddings
         })
 
-prefix = 'what is it?'
-
-max_input_length = 128
-max_target_length = 128
-source_field = ""
-target_field = "label_name"
-
-embeddings_3d_length = 1
 
 def preprocess_function(example):
     inputs = prefix
@@ -169,10 +170,12 @@ def preprocess_function(example):
     model_inputs["extra_embeddings"] = example["embeddings"].permute(1, 0).detach().cpu().numpy()
     model_inputs['extra_embeddings_positions'] = len(model_inputs['attention_mask'])
 
-    model_inputs['input_ids'].extend([ tokenizer.pad_token_id ] * embeddings_3d_length)
+    seq_len = model_inputs["extra_embeddings"].shape[0]
+
+    model_inputs['input_ids'].extend([ tokenizer.pad_token_id ] * seq_len)
 
     # там будут эмбеддинги, поэтому надо учитывать внимание для этих токенов
-    model_inputs['attention_mask'].extend([ 1 ] * embeddings_3d_length)
+    model_inputs['attention_mask'].extend([ 1 ] * seq_len)
 
     inputs_decoded = tokenizer.decode(model_inputs['input_ids'], skip_special_tokens=False)
     # print("inputs_decoded", inputs_decoded)
@@ -180,10 +183,24 @@ def preprocess_function(example):
     return model_inputs
 
 
-batch_size = 512
+print("argparse_args.embedding_level", argparse_args1.embedding_level)
+
+embedds_dataset_test = PointNet2EmbeddingsDataset(test_dataset, embedding_level=argparse_args1.embedding_level)
+embedds_dataset_train = PointNet2EmbeddingsDataset(train_dataset, embedding_level=argparse_args1.embedding_level)
+
+prefix = 'what is it?'
+
+max_input_length = 128
+max_target_length = 128
+source_field = ""
+target_field = "label_name"
+
+embeddings_3d_length = embedds_dataset_train[0]['extra_embeddings'].shape[0]
+
+batch_size = 32
 model_name = model_checkpoint.split("/")[-1]
 hf_args = Seq2SeqTrainingArguments(
-    f"{model_name}-finetuned-3d-classification",
+    f"{model_name}-finetuned-3d-classification-3Demb-seqlen-{embeddings_3d_length}",
     evaluation_strategy = "no",
     save_strategy = "epoch",
     learning_rate=3e-4,
@@ -197,12 +214,11 @@ hf_args = Seq2SeqTrainingArguments(
     push_to_hub=False,
 )
 
-embedds_dataset_test = PointNet2EmbeddingsDataset(test_dataset)
-embedds_dataset_train = PointNet2EmbeddingsDataset(train_dataset)
-
 # from torch.utils.data import random_split
 # n_train_samples = 40
 # test_little_dataset, _ = random_split(embedds_dataset_test, [ n_train_samples, len(embedds_dataset_test) - n_train_samples ], generator=torch.Generator().manual_seed(42))
+# embedds_dataset_train = test_little_dataset
+# embedds_dataset_test = test_little_dataset
 
 trainer = Seq2SeqTrainer(
     model,
@@ -217,3 +233,47 @@ trainer = Seq2SeqTrainer(
 trainer.train()
 
 trainer.evaluate(embedds_dataset_test)
+
+
+
+# 1 embedding
+
+# wandb: Waiting for W&B process to finish, PID 26002... (success).
+# wandb: Run history:
+# wandb:                    eval/accuracy ▁
+# wandb:                     eval/gen_len ▁
+# wandb:                        eval/loss ▁
+# wandb:                     eval/runtime ▁
+# wandb:          eval/samples_per_second ▁
+# wandb:            eval/steps_per_second ▁
+# wandb:                      train/epoch ▁▁
+# wandb:                train/global_step ▁▁
+# wandb:                 train/total_flos ▁
+# wandb:                 train/train_loss ▁
+# wandb:              train/train_runtime ▁
+# wandb:   train/train_samples_per_second ▁
+# wandb:     train/train_steps_per_second ▁
+# wandb: 
+# wandb: Run summary:
+# wandb:                    eval/accuracy 0.9117
+# wandb:                     eval/gen_len 2.594
+# wandb:                        eval/loss 0.13395
+# wandb:                     eval/runtime 142.7663
+# wandb:          eval/samples_per_second 17.287
+# wandb:            eval/steps_per_second 0.035
+# wandb:                      train/epoch 5.0
+# wandb:                train/global_step 100
+# wandb:                 train/total_flos 78986607114240.0
+# wandb:                 train/train_loss 0.94013
+# wandb:              train/train_runtime 15091.7846
+# wandb:   train/train_samples_per_second 3.261
+# wandb:     train/train_steps_per_second 0.007
+# wandb: 
+# wandb: You can sync this run to the cloud by running:
+# wandb: wandb sync /data_new/d.tarasov/workspace/3d/Pointnet_Pointnet2_pytorch/wandb/offline-run-20220425_122756-2sxt1pq7
+# wandb: Find logs at: ./wandb/offline-run-20220425_122756-2sxt1pq7/logs/debug.log
+# wandb: 
+# WANDB_MODE=offline python models/t5_points.py  1949.18s user 1273.61s system 21% cpu 4:14:25.89 total
+
+
+# WANDB_MODE=offline python models/t5_points.py --embedding_level=-2
