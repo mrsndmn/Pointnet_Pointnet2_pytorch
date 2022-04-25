@@ -46,10 +46,10 @@ def compute_metrics(eval_preds):
 
     decoded_labels = [ x[0] for x in decoded_labels ]
 
-    print("preds", preds)
-    print("labels", labels)
-    print("decoded_preds", decoded_preds)
-    print("decoded_labels", decoded_labels)
+    # print("preds", preds)
+    # print("labels", labels)
+    # print("decoded_preds", decoded_preds)
+    # print("decoded_labels", decoded_labels)
 
     total = len(decoded_labels)
     match = 0
@@ -83,6 +83,7 @@ parser.add_argument('--save_embeddings', action='store_true', default=False, hel
 argparse_args = parser.parse_args([])
 
 test_dataset = ModelNetDataLoader(root='data/modelnet40_normal_resampled', args=argparse_args, split='test', process_data=False)
+train_dataset = ModelNetDataLoader(root='data/modelnet40_normal_resampled', args=argparse_args, split='train', process_data=False)
 
 from torch.utils.data import Dataset
 import torch
@@ -179,37 +180,40 @@ def preprocess_function(example):
     return model_inputs
 
 
-embedds_dataset = PointNet2EmbeddingsDataset(test_dataset)
-
-batch_size = 16
+batch_size = 512
 model_name = model_checkpoint.split("/")[-1]
 hf_args = Seq2SeqTrainingArguments(
     f"{model_name}-finetuned-3d-classification",
-    evaluation_strategy = "epoch",
+    evaluation_strategy = "no",
+    save_strategy = "epoch",
     learning_rate=3e-4,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     weight_decay=0.01,
     save_total_limit=3,
-    num_train_epochs=100,
+    num_train_epochs=5,
     predict_with_generate=True,
     fp16=False,
     push_to_hub=False,
 )
 
-from torch.utils.data import random_split
+embedds_dataset_test = PointNet2EmbeddingsDataset(test_dataset)
+embedds_dataset_train = PointNet2EmbeddingsDataset(train_dataset)
 
-n_train_samples = 100
-little_dataset, _ = random_split(embedds_dataset, [ n_train_samples, len(embedds_dataset) - n_train_samples ], generator=torch.Generator().manual_seed(42))
+# from torch.utils.data import random_split
+# n_train_samples = 40
+# test_little_dataset, _ = random_split(embedds_dataset_test, [ n_train_samples, len(embedds_dataset_test) - n_train_samples ], generator=torch.Generator().manual_seed(42))
 
 trainer = Seq2SeqTrainer(
     model,
     hf_args,
-    train_dataset=little_dataset,
-    eval_dataset=little_dataset,
+    train_dataset=embedds_dataset_train,
+    eval_dataset=embedds_dataset_test,
     data_collator=data_collator,
     tokenizer=tokenizer,
     compute_metrics=compute_metrics
 )
 
 trainer.train()
+
+trainer.evaluate(embedds_dataset_test)

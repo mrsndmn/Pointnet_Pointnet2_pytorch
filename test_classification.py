@@ -17,6 +17,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = BASE_DIR
 sys.path.append(os.path.join(ROOT_DIR, 'models'))
 
+# train split embeddings
+# python test_classification.py --gpu 0 --num_category 40 --log_dir pointnet2_msg_normals_train --batch_size 24 --num_point 1024 --num_votes 3 --use_normals --split train
 
 def parse_args():
     '''PARAMETERS'''
